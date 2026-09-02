@@ -33,6 +33,7 @@
 - 🔄 **Auto Token Refresh** — Automatically saves new refresh tokens on each use, preventing expiry
 - 📦 **Batch Operations** — Import/export/delete/move in bulk, including per-row & selected export, with group & status filters
 - 📨 **Email Reading** — Read inbox / junk / deleted via Microsoft Graph API with folder switching, aggregated view, paginated load-more, search and HTML rendering
+- 🛡️ **Email Privacy** — External images, backgrounds and links are blocked by default; placeholders load only after an explicit click and can be disabled in Settings
 - 📭 **Temp Email** — GPTMail API integration for disposable email addresses
 - 🎨 **Polished Themes** — Dark / Light / Auto with glassmorphism, circle-swoop transition & ambient breathing glow
 - 🌐 **Bilingual UI** — Chinese by default, one-click switch to English in the topbar, preference remembered locally, backend messages translated on display

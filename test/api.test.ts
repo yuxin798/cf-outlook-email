@@ -182,3 +182,62 @@ describe('accounts route: status recovery on token update', () => {
     expect(updateCall![6]).toBe('disabled');
   });
 });
+
+describe('privacy settings', () => {
+  it('defaults external-content blocking to enabled for older installations', async () => {
+    const settingsRoute = (await import('../src/routes/settings')).default;
+    const mockDB = createMockDB();
+    mockDB._stmt.all.mockResolvedValue({ results: [] });
+
+    const res = await settingsRoute.request('/', { method: 'GET' }, { DB: mockDB } as any);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { data: Record<string, string> };
+    expect(body.data.privacy_block_external_content).toBe('1');
+  });
+
+  it('persists valid privacy setting values', async () => {
+    const settingsRoute = (await import('../src/routes/settings')).default;
+    const mockDB = createMockDB();
+
+    const res = await settingsRoute.request(
+      '/',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ privacy_block_external_content: '0' }),
+      },
+      { DB: mockDB } as any
+    );
+    expect(res.status).toBe(200);
+    expect(mockDB._stmt.bind).toHaveBeenCalledWith('privacy_block_external_content', '0');
+  });
+
+  it('preserves an explicitly disabled privacy setting', async () => {
+    const settingsRoute = (await import('../src/routes/settings')).default;
+    const mockDB = createMockDB();
+    mockDB._stmt.all.mockResolvedValue({
+      results: [{ key: 'privacy_block_external_content', value: '0' }],
+    });
+
+    const res = await settingsRoute.request('/', { method: 'GET' }, { DB: mockDB } as any);
+    const body = await res.json() as { data: Record<string, string> };
+    expect(body.data.privacy_block_external_content).toBe('0');
+  });
+
+  it('rejects invalid privacy setting values', async () => {
+    const settingsRoute = (await import('../src/routes/settings')).default;
+    const mockDB = createMockDB();
+
+    const res = await settingsRoute.request(
+      '/',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ privacy_block_external_content: 'yes' }),
+      },
+      { DB: mockDB } as any
+    );
+    expect(res.status).toBe(400);
+    expect(mockDB._stmt.bind).not.toHaveBeenCalledWith('privacy_block_external_content', 'yes');
+  });
+});

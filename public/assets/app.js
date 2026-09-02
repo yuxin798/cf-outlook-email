@@ -79,6 +79,8 @@ let state = {
   selectedEmailIds: new Set(),
   pendingEmailAccount: null,
   pendingAccountStatus: null,
+  privacyBlockExternalContent: true,
+  privacyLoaded: false,
 };
 
 // ========== API Helpers ==========
@@ -1058,8 +1060,79 @@ async function deleteAccount(id) {
 }
 
 // ========== Emails ==========
+async function loadPrivacySettings() {
+  if (state.privacyLoaded) return;
+  // Privacy settings fail closed: a transient settings request failure must
+  // never cause email HTML to load external resources automatically.
+  try {
+    const res = await api('/settings');
+    if (res?.success) state.privacyBlockExternalContent = res.data?.privacy_block_external_content !== '0';
+  } catch (_) {
+    state.privacyBlockExternalContent = true;
+  }
+  state.privacyLoaded = true;
+}
+
+function emailPrivacyLabels() {
+  return {
+    image: t('点击加载外部图片'),
+    imageMarker: '🔒',
+  };
+}
+
+function emailPrivacyNotice(counts) {
+  if (!state.privacyBlockExternalContent) return '';
+  const total = (counts.images || 0) + (counts.links || 0) + (counts.backgrounds || 0);
+  if (!total) return '';
+  return `<div class="email-privacy-notice">🔒 ${t('邮件中的外部内容已阻止')} · ${t('已阻止 {n} 个外部资源', { n: total })}</div>`;
+}
+
+function emailFrameStyles() {
+  return `
+    body{font-family:sans-serif;font-size:14px;color:#333;margin:12px;line-height:1.7;overflow-wrap:anywhere}
+    .privacy-image-placeholder{position:relative;display:inline-block;vertical-align:middle;box-sizing:border-box;max-width:100%;background:repeating-linear-gradient(135deg,#f3f4f6,#f3f4f6 8px,#e5e7eb 8px,#e5e7eb 16px);border:1px dashed #9ca3af;border-radius:4px;cursor:pointer!important;text-align:center;overflow:hidden;pointer-events:auto!important}
+    .privacy-image-placeholder>img,.privacy-image-placeholder>picture{display:block;max-width:100%;width:100%;height:100%;opacity:0}
+    .privacy-image-placeholder>picture img{max-width:100%;width:100%;height:100%;opacity:0}
+    .privacy-image-placeholder:not(.privacy-image-loaded)::after{content:'🔒';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:18px;pointer-events:none}
+    .privacy-image-placeholder:not(.privacy-image-loaded) .privacy-image-badge{display:none}
+    .privacy-blocked-bg{outline:1px dashed #9ca3af;outline-offset:2px;cursor:pointer!important}
+    .privacy-blocked-bg::after{content:'🔒';display:inline-block;margin-left:4px;font-size:11px;opacity:.75}
+    .privacy-blocked-link{cursor:pointer!important;text-decoration:underline dotted;color:#4f46e5;pointer-events:auto!important}
+    .privacy-blocked-link::after{content:' 🔒';font-size:.8em;opacity:.7}
+  `;
+}
+
+function openExternalEmailLink(url) {
+  let parsed;
+  try { parsed = new URL(url, window.location.href); } catch (_) { return; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+  const display = parsed.href;
+  if (!window.confirm(t('即将打开外部链接：{url}', { url: display }) + '\n\n' + t('确认继续？'))) return;
+  const opened = window.open(display, '_blank', 'noopener,noreferrer');
+  if (!opened) toast(t('无法打开外部链接，请检查浏览器弹窗设置'), 'error');
+}
+
+function prepareEmailBody(html) {
+  return EmailPrivacy.prepare(html, {
+    blockExternalContent: state.privacyBlockExternalContent,
+    labels: emailPrivacyLabels(),
+  });
+}
+
+function mountEmailFrame(frame, prepared) {
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  doc.open();
+  // Append the privacy rules after the email's own styles so a message cannot
+  // visually hide or disable the blocked-content markers.
+  doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${prepared.bodyHtml}<style id="privacy-frame-style">${emailFrameStyles()}</style></body></html>`);
+  doc.close();
+  EmailPrivacy.bindFrame(frame, { onExternalLink: openExternalEmailLink });
+}
+
 async function renderEmails(el) {
   el.innerHTML = '<div class="loading"><div class="spinner"></div>' + t('加载中...') + '</div>';
+  await loadPrivacySettings();
   await loadAccounts();
 
   if (state.accounts.length === 0) {
@@ -1339,8 +1412,13 @@ async function viewEmail(index) {
   }
 
   const e = res.data;
+  await loadPrivacySettings();
+  let prepared = null;
   const bodyContent = e.body?.contentType === 'html'
-    ? `<iframe id="emailFrame" sandbox="allow-same-origin" onload="resizeFrame(this)"></iframe>`
+    ? (() => {
+        prepared = prepareEmailBody(e.body.content || '');
+        return `${emailPrivacyNotice(prepared.counts)}<iframe id="emailFrame" sandbox="allow-same-origin" referrerpolicy="no-referrer" onload="resizeFrame(this)"></iframe>`;
+      })()
     : `<pre style="white-space:pre-wrap;font-family:inherit">${esc(e.body?.content || e.bodyPreview || '')}</pre>`;
 
   pane.innerHTML = `
@@ -1362,14 +1440,9 @@ async function viewEmail(index) {
 
   if (e.hasAttachments) loadAttachments(e.id);
 
-  if (e.body?.contentType === 'html') {
+  if (e.body?.contentType === 'html' && prepared) {
     const frame = document.getElementById('emailFrame');
-    if (frame) {
-      const doc = frame.contentDocument;
-      doc.open();
-      doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;font-size:14px;color:#333;margin:12px;}</style></head><body>${e.body.content}</body></html>`);
-      doc.close();
-    }
+    if (frame) mountEmailFrame(frame, prepared);
   }
 }
 
@@ -1475,6 +1548,7 @@ async function loadTempEmails() {
 
 async function renderTempEmails(el) {
   el.innerHTML = '<div class="loading"><div class="spinner"></div>' + t('加载中...') + '</div>';
+  await loadPrivacySettings();
   await loadTempEmails();
 
   const toolbar = pageToolbarHtml(
@@ -1559,9 +1633,11 @@ async function viewTempMessage(emailId, messageId) {
   // Render untrusted HTML bodies inside a sandboxed, script-less iframe (same as
   // the main mailbox detail view) so malicious markup - e.g. <img onerror> - can't
   // execute in the app origin. Plain-text bodies stay escaped in a <pre>.
+  await loadPrivacySettings();
   const isHtml = e.body_type === 'html';
+  const prepared = isHtml ? prepareEmailBody(String(e.body || '')) : null;
   const bodyContent = isHtml
-    ? `<iframe id="tempMailFrame" sandbox="allow-same-origin" onload="resizeFrame(this)" style="width:100%;border:none;min-height:300px;background:#fff;border-radius:var(--radius)"></iframe>`
+    ? `${emailPrivacyNotice(prepared.counts)}<iframe id="tempMailFrame" sandbox="allow-same-origin" referrerpolicy="no-referrer" onload="resizeFrame(this)" style="width:100%;border:none;min-height:300px;background:#fff;border-radius:var(--radius)"></iframe>`
     : `<pre style="white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.7">${esc(String(e.body || ''))}</pre>`;
   pane.innerHTML = `
     <div>
@@ -1572,14 +1648,9 @@ async function viewTempMessage(emailId, messageId) {
     </div>
   `;
 
-  if (isHtml) {
+  if (isHtml && prepared) {
     const frame = document.getElementById('tempMailFrame');
-    if (frame) {
-      const doc = frame.contentDocument;
-      doc.open();
-      doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;font-size:14px;color:#333;margin:12px;}</style></head><body>${e.body || ''}</body></html>`);
-      doc.close();
-    }
+    if (frame) mountEmailFrame(frame, prepared);
   }
 }
 
@@ -1588,6 +1659,8 @@ async function renderSettings(el) {
   el.innerHTML = '<div class="loading"><div class="spinner"></div>' + t('加载中...') + '</div>';
   const res = await api('/settings');
   const settings = res?.data || {};
+  state.privacyBlockExternalContent = settings.privacy_block_external_content !== '0';
+  state.privacyLoaded = true;
 
   el.innerHTML = `
     <div class="settings-grid">
@@ -1604,6 +1677,12 @@ async function renderSettings(el) {
       <div class="form-group">
         <label class="form-label">${t('站点标题')}</label>
         <input class="form-input" id="sSiteTitle" value="${esc(settings.site_title || t('Outlook 邮件管理'))}">
+      </div>
+      <div class="form-group" style="display:flex;align-items:flex-start;gap:10px">
+        <label style="display:inline-flex;align-items:flex-start;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="sPrivacyBlockExternal" ${settings.privacy_block_external_content !== '0' ? 'checked' : ''}>
+          <span>${t('阻止邮件外部内容')}<small style="display:block;color:var(--text-dim);font-size:11px;line-height:1.5;margin-top:3px">${t('开启后，外部图片和链接需手动点击才会加载')}</small></span>
+        </label>
       </div>
       <button class="btn btn-primary" onclick="saveSettings()">${t('保存设置')}</button>
     </div>
@@ -1774,13 +1853,19 @@ async function saveSettings() {
   const pwd = document.getElementById('sPassword').value.trim();
   const apiKey = document.getElementById('sApiKey').value.trim();
   const title = document.getElementById('sSiteTitle').value.trim();
+  const privacy = document.getElementById('sPrivacyBlockExternal');
   if (pwd) body.login_password = pwd;
   if (apiKey) body.gptmail_api_key = apiKey;
   if (title) body.site_title = title;
+  if (privacy) body.privacy_block_external_content = privacy.checked ? '1' : '0';
 
   if (Object.keys(body).length === 0) { toast(t('没有需要更新的设置'), 'error'); return; }
   const res = await api('/settings', { method: 'PUT', body: JSON.stringify(body) });
-  if (res?.success) toast(res.message || t('设置已保存'));
+  if (res?.success) {
+    if (privacy) state.privacyBlockExternalContent = privacy.checked;
+    state.privacyLoaded = true;
+    toast(res.message || t('设置已保存'));
+  }
   else toast(res?.error?.message || t('保存失败'), 'error');
 }
 

@@ -8,6 +8,7 @@ import { runTokenRefresh, runEmailPush } from '../cron';
 import { sendTelegramMessage } from '../telegram';
 
 const settings = new Hono<{ Bindings: Env }>();
+const PRIVACY_SETTING_KEY = 'privacy_block_external_content';
 
 // GET /api/settings
 settings.get('/', async (c) => {
@@ -24,6 +25,12 @@ settings.get('/', async (c) => {
       // external_api_key is returned in full so the admin can copy it (page is behind login)
       data[row.key] = row.value;
     }
+  }
+
+  // Privacy protection is enabled by default, including on installations that
+  // predate this setting key. Persisting is deferred until the admin saves it.
+  if (data[PRIVACY_SETTING_KEY] !== '0' && data[PRIVACY_SETTING_KEY] !== '1') {
+    data[PRIVACY_SETTING_KEY] = '1';
   }
 
   return ok(data);
@@ -168,6 +175,23 @@ settings.put('/', async (c) => {
         [key, String(body[key]).trim()]
       );
       updated.push(`定时刷新-${label}`);
+    }
+  }
+
+  // Privacy protection for external content in email bodies. The frontend
+  // sends a string checkbox value; reject anything else so the default remains
+  // unambiguous and fail-closed.
+  if (body[PRIVACY_SETTING_KEY] !== undefined) {
+    const value = String(body[PRIVACY_SETTING_KEY]).trim();
+    if (value !== '0' && value !== '1') {
+      errors.push('外部内容阻止设置无效');
+    } else {
+      await run(
+        c.env.DB,
+        `INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
+        [PRIVACY_SETTING_KEY, value]
+      );
+      updated.push('外部内容阻止');
     }
   }
 

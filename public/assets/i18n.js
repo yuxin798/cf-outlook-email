@@ -49,6 +49,14 @@ var I18N_EN = {
   '更新失败': 'Update failed',
   '保存失败': 'Save failed',
   '获取失败': 'Fetch failed',
+  '阻止邮件外部内容': 'Block external email content',
+  '开启后，外部图片和链接需手动点击才会加载': 'When enabled, external images and links load only after a click',
+  '邮件中的外部内容已阻止': 'External email content is blocked',
+  '已阻止 {n} 个外部资源': '{n} external resources blocked',
+  '点击加载外部图片': 'Click to load external image',
+  '即将打开外部链接：{url}': 'You are about to open an external link: {url}',
+  '确认继续？': 'Continue?',
+  '无法打开外部链接，请检查浏览器弹窗设置': 'Could not open the external link - check your browser pop-up settings',
   '取消': 'Cancel',
   '确定': 'OK',
   '处理中...': 'Processing...',
@@ -392,6 +400,7 @@ var SERVER_EN = {
   '请先填写并保存 Bot Token 和 Chat ID': 'Fill in and save the Bot Token and Chat ID first',
   '测试消息已发送，请检查 Telegram': 'Test message sent - check Telegram',
   '没有需要更新的设置': 'Nothing to update',
+  '外部内容阻止设置无效': 'Invalid external-content blocking setting',
   '标签名不能为空': 'Tag name is required',
   '标签已创建': 'Tag created',
   '创建失败，标签名可能已存在': 'Create failed - the tag name may already exist',
@@ -437,6 +446,7 @@ var SERVER_EN_PATTERNS = [
     var mapped = list.split(', ').map(function (item) {
       if (item === '登录密码') return 'login password';
       if (item === '站点标题') return 'site title';
+      if (item === '外部内容阻止') return 'external-content blocking';
       return item.replace(/^定时刷新-/, 'token-refresh-');
     });
     return 'Updated: ' + mapped.join(', ');

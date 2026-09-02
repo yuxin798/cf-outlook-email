@@ -68,6 +68,133 @@
     return found;
   }
 
+  function skipCssComment(css, index) {
+    var end = css.indexOf('*/', index + 2);
+    return end === -1 ? css.length : end + 2;
+  }
+
+  function skipCssString(css, index) {
+    var quote = css[index++];
+    while (index < css.length) {
+      if (css[index] === '\\') {
+        index += 2;
+      } else if (css[index++] === quote) {
+        break;
+      }
+    }
+    return index;
+  }
+
+  function readCssEscape(css, index) {
+    var cursor = index + 1;
+    var hex = '';
+    while (cursor < css.length && hex.length < 6 && /[0-9a-f]/i.test(css[cursor])) {
+      hex += css[cursor++];
+    }
+    if (hex) {
+      if (/\s/.test(css[cursor] || '')) cursor++;
+      var codePoint = parseInt(hex, 16);
+      return {
+        value: codePoint <= 0xffff ? String.fromCharCode(codePoint) : '',
+        end: cursor,
+      };
+    }
+    return { value: css[cursor] || '', end: Math.min(cursor + 1, css.length) };
+  }
+
+  function cssImportKeywordEnd(css, atIndex) {
+    var cursor = atIndex + 1;
+    var keyword = '';
+
+    // Be conservative around comments and whitespace after "@" so mildly
+    // obfuscated imports do not survive differences between CSS parsers.
+    while (cursor < css.length) {
+      if (css.slice(cursor, cursor + 2) === '/*') {
+        cursor = skipCssComment(css, cursor);
+      } else if (/\s/.test(css[cursor])) {
+        cursor++;
+      } else {
+        break;
+      }
+    }
+
+    while (cursor < css.length) {
+      if (css.slice(cursor, cursor + 2) === '/*') {
+        cursor = skipCssComment(css, cursor);
+      } else if (css[cursor] === '\\') {
+        var escaped = readCssEscape(css, cursor);
+        keyword += escaped.value;
+        cursor = escaped.end;
+      } else if (/[a-z-]/i.test(css[cursor])) {
+        keyword += css[cursor++];
+      } else {
+        break;
+      }
+    }
+    return keyword.toLowerCase() === 'import' ? cursor : -1;
+  }
+
+  function cssAtRuleEnd(css, index) {
+    var parentheses = 0;
+    while (index < css.length) {
+      if (css.slice(index, index + 2) === '/*') {
+        index = skipCssComment(css, index);
+      } else if (css[index] === '"' || css[index] === "'") {
+        index = skipCssString(css, index);
+      } else if (css[index] === '(') {
+        parentheses++;
+        index++;
+      } else if (css[index] === ')') {
+        parentheses = Math.max(0, parentheses - 1);
+        index++;
+      } else if (css[index] === ';' && parentheses === 0) {
+        return index + 1;
+      } else {
+        index++;
+      }
+    }
+    return css.length;
+  }
+
+  function stripCssImports(value) {
+    var css = String(value || '');
+    var output = '';
+    var copiedUntil = 0;
+    var cursor = 0;
+    var removed = 0;
+
+    while (cursor < css.length) {
+      if (css.slice(cursor, cursor + 2) === '/*') {
+        cursor = skipCssComment(css, cursor);
+      } else if (css[cursor] === '"' || css[cursor] === "'") {
+        cursor = skipCssString(css, cursor);
+      } else if (css[cursor] === '@') {
+        var keywordEnd = cssImportKeywordEnd(css, cursor);
+        if (keywordEnd !== -1) {
+          output += css.slice(copiedUntil, cursor);
+          cursor = cssAtRuleEnd(css, keywordEnd);
+          copiedUntil = cursor;
+          removed++;
+        } else {
+          cursor++;
+        }
+      } else {
+        cursor++;
+      }
+    }
+    return { css: output + css.slice(copiedUntil), removed: removed };
+  }
+
+  function stripStyleImports(doc) {
+    var removed = 0;
+    doc.querySelectorAll('style').forEach(function (style) {
+      var result = stripCssImports(style.textContent || '');
+      if (result.removed) style.textContent = result.css;
+      removed += result.removed;
+    });
+    return removed;
+  }
+
   function setJsonAttribute(el, name, value) {
     try { el.setAttribute(name, JSON.stringify(value)); } catch (_) { /* ignore malformed style data */ }
   }
@@ -283,8 +410,13 @@
     var labels = options.labels || {};
 
     sanitizeDangerousMarkup(doc);
+    // Imported stylesheets can recursively fetch arbitrary resources and
+    // cannot be restored as one user-visible placeholder, so always remove
+    // them before any style element reaches the live iframe.
+    var removedStyleImports = stripStyleImports(doc);
     var blockExternalContent = options.blockExternalContent !== false;
     if (blockExternalContent) {
+      counts.backgrounds += removedStyleImports;
       processStyleBlocks(doc, counts);
       doc.querySelectorAll('[style]').forEach(function (el) {
         var urls = styleHasExternalUrl(el.getAttribute('style'));
@@ -424,6 +556,7 @@
   global.EmailPrivacy = {
     prepare: prepare,
     bindFrame: bindFrame,
+    stripCssImports: stripCssImports,
     transparentPixel: TRANSPARENT_PIXEL,
   };
 })(window);

@@ -1,0 +1,16 @@
+name = "outlook-email"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "outlook-email-db"
+database_id = "778b1c2d-0f6d-4195-83d9-e521d68c86c8"
+migrations_dir = "migrations"
+
+[triggers]
+crons = ["0 */6 * * *"]

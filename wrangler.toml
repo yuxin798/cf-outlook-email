@@ -1,4 +1,4 @@
-name = "outlook-email"
+name = "cf-outlook-email"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
 
